@@ -1,0 +1,20 @@
+{
+  "_comment": "Block merged into ~/.claude/settings.json by scripts/install.sh. Replace CCB_PY with the absolute path to scripts/ccb.py. Hooks load at Claude Code session start; restart sessions after changes. ccb.py exits immediately unless CCB_TASK is set, so manual sessions are unaffected.",
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "Notification": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "SessionEnd": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ]
+  }
+}

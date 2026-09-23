@@ -1,0 +1,53 @@
+# Hermes webhook routes for ccb.
+#
+# Two ways to install:
+#   a) install.sh creates them dynamically with `hermes webhook subscribe` — then add
+#      `secret`, `script` and `skills` by editing ~/.hermes/webhook_subscriptions.json
+#      (hot-reloaded, no restart).
+#   b) paste this block into ~/.hermes/config.yaml under platforms.webhook.extra.routes
+#      (static routes win over dynamic ones with the same name; needs gateway restart).
+#
+# Prereqs: WEBHOOK_ENABLED=true in ~/.hermes/.env (port 8644 default), gateway bound to
+# 127.0.0.1 — ccb only ever talks to loopback.
+#
+# Auth is HMAC-SHA256 v2: ccb sends X-Webhook-Signature-V2 + X-Webhook-Timestamp.
+# The secret must equal webhook_secret in ~/.config/ccb/config.json.
+
+platforms:
+  webhook:
+    enabled: true
+    extra:
+      host: 127.0.0.1
+      port: 8644
+      routes:
+
+        # Zero-LLM path: "done", "session ended". Rendered template is the message.
+        ccb-notify:
+          secret: "${CCB_WEBHOOK_SECRET}"
+          events: ["notify"]
+          script: "ccb-filter.py"          # ~/.hermes/scripts/ccb-filter.py
+          deliver: "telegram"
+          deliver_only: true
+          prompt: "{text}"
+          # deliver_extra:
+          #   chat_id: "123456789"          # omit → platform home channel
+
+        # Agent path: Claude Code is blocked on a human. Loads the cc-bridge skill.
+        ccb-ask:
+          secret: "${CCB_WEBHOOK_SECRET}"
+          events: ["ask"]
+          script: "ccb-filter.py"
+          skills: ["cc-bridge"]
+          toolsets: ["terminal", "file"]   # ccb status / ccb tail only; no web
+          deliver: "telegram"
+          prompt: |
+            event: ask
+            A Claude Code session needs the human. Use the cc-bridge skill, procedure B.
+            Reply in the human's language, one message, prefixed with [{name}].
+            name: {name}
+            status: {status}
+            question: {question}
+            permission: {permission}
+            marker: {marker}
+            --- last screen lines ---
+            {tail}

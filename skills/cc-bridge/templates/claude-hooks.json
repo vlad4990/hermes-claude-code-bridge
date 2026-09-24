@@ -1,19 +1,29 @@
 {
-  "_comment": "Block merged into ~/.claude/settings.json by scripts/install.sh. Replace CCB_PY with the absolute path to scripts/ccb.py. Hooks load at Claude Code session start; restart sessions after changes. ccb.py exits immediately unless CCB_TASK is set, so manual sessions are unaffected.",
+  "_comment": "Merged into ~/.claude/settings.json by scripts/install.sh, which replaces CCB_PY with the absolute path of scripts/ccb.py. Hooks load at Claude Code session start, so restart sessions after changes. ccb.py exits immediately unless CCB_TASK is set (ccb start sets it), so manual `claude` sessions are untouched. PermissionRequest is the blocking interception point: it publishes the question / permission and waits up to config.answer_timeout (3300 s) for `ccb answer`; its `timeout` must stay above that.",
   "hooks": {
+    "PermissionRequest": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 3600 } ] }
+    ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 30 } ] }
     ],
     "Notification": [
-      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
-    ],
-    "PermissionRequest": [
-      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+      { "matcher": "permission_prompt|idle_prompt",
+        "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 30 } ] }
     ],
     "SessionEnd": [
       { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
     ],
     "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "PostToolUseFailure": [
+      { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
+    ],
+    "PermissionDenied": [
       { "hooks": [ { "type": "command", "command": "python3 CCB_PY hook", "timeout": 10 } ] }
     ]
   }

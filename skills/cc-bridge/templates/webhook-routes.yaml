@@ -1,17 +1,19 @@
-# Hermes webhook routes for ccb.
+# Hermes webhook routes for the `webhook` sink of ccb (payload contract: references/event-contract.md).
 #
 # Two ways to install:
-#   a) install.sh creates them dynamically with `hermes webhook subscribe` — then add
-#      `secret`, `script` and `skills` by editing ~/.hermes/webhook_subscriptions.json
-#      (hot-reloaded, no restart).
+#   a) scripts/install.sh creates them with `hermes webhook subscribe` (hot-reloaded, no gateway
+#      restart) and then patches ~/.hermes/webhook_subscriptions.json to add `toolsets`, which the
+#      CLI deliberately cannot set.
 #   b) paste this block into ~/.hermes/config.yaml under platforms.webhook.extra.routes
-#      (static routes win over dynamic ones with the same name; needs gateway restart).
+#      (static routes win over dynamic ones with the same name; needs a gateway restart).
 #
-# Prereqs: WEBHOOK_ENABLED=true in ~/.hermes/.env (port 8644 default), gateway bound to
-# 127.0.0.1 — ccb only ever talks to loopback.
+# Prereqs: WEBHOOK_ENABLED=true in ~/.hermes/.env (port 8644 by default). ccb only talks to
+# loopback; keep the adapter bound to 127.0.0.1. Auth is HMAC-SHA256 v2 (X-Webhook-Signature-V2
+# + X-Webhook-Timestamp); `secret` must equal webhook_secret in ~/.config/ccb/config.json.
 #
-# Auth is HMAC-SHA256 v2: ccb sends X-Webhook-Signature-V2 + X-Webhook-Timestamp.
-# The secret must equal webhook_secret in ~/.config/ccb/config.json.
+# Payload fields you can template: {title} {text} {kind} {name} {status} {request_id}
+# {reply_hint} {answer_command} {questions} {permission} {last_message} {marker} {tail} {cwd}.
+# Nested fields are JSON-serialised and truncated at 2000 chars by Hermes.
 
 platforms:
   webhook:
@@ -21,7 +23,8 @@ platforms:
       port: 8644
       routes:
 
-        # Zero-LLM path: "done", "session ended". Rendered template is the message.
+        # Zero-LLM path: Claude finished a turn / is done / session ended. {text} is already
+        # human-readable, so the rendered template IS the message.
         ccb-notify:
           secret: "${CCB_WEBHOOK_SECRET}"
           events: ["notify"]
@@ -30,24 +33,35 @@ platforms:
           deliver_only: true
           prompt: "{text}"
           # deliver_extra:
-          #   chat_id: "123456789"          # omit → platform home channel
+          #   chat_id: "123456789"          # omit → the platform's home channel
+          #   message_thread_id: "42"       # optional forum topic
 
-        # Agent path: Claude Code is blocked on a human. Loads the cc-bridge skill.
+        # Agent path: Claude Code is blocked on a human (AskUserQuestion or a permission).
+        # The agent rephrases the question in the human's language and relays the reply with
+        # `ccb answer` — hence `toolsets: [terminal]` (manual edit; the CLI cannot grant it).
+        #
+        # Zero-LLM alternative: set `deliver_only: true` and `prompt: "{text}"` here too. The
+        # human then replies in Telegram and the Telegram-session agent (with the cc-bridge skill
+        # loaded) runs `ccb answer` — procedure C in SKILL.md.
         ccb-ask:
           secret: "${CCB_WEBHOOK_SECRET}"
           events: ["ask"]
           script: "ccb-filter.py"
           skills: ["cc-bridge"]
-          toolsets: ["terminal", "file"]   # ccb status / ccb tail only; no web
+          toolsets: ["terminal"]
           deliver: "telegram"
           prompt: |
             event: ask
-            A Claude Code session needs the human. Use the cc-bridge skill, procedure B.
-            Reply in the human's language, one message, prefixed with [{name}].
+            A Claude Code session needs the human. Follow the cc-bridge skill, procedure B.
+            Relay the question below to the human in one message in their language, keep the
+            option numbers exactly as given, then stop and wait for the reply.
+            {title}
+            kind: {kind}
             name: {name}
-            status: {status}
-            question: {question}
-            permission: {permission}
-            marker: {marker}
+            request_id: {request_id}
+            reply_hint: {reply_hint}
+            answer_command: {answer_command}
+            --- message ---
+            {text}
             --- last screen lines ---
             {tail}

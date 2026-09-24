@@ -1,71 +1,75 @@
-# Claude Code hook events → ccb state
+# Claude Code hook events → ccb state and events
 
-Read this when an event looks misclassified or a new Claude Code release changes payloads.
-Field names below are what `ccb hook` expects; **verify against the raw dumps** in
-`~/.cache/ccb/raw/*.json` (enabled by `raw_log: true`) — Claude Code's hook schema has
-changed several times.
+Verified against Claude Code **2.1.281** (2026-09-24) with real payloads; raw dumps can be
+re-enabled with `"raw_log": true` (written to `~/.cache/ccb/raw/`). The hook block lives in
+`templates/claude-hooks.json`. `CCB_TASK` (set by `ccb start` through `tmux new-session -e`)
+names the session; without it every hook exits 0 immediately.
 
-## Common fields (every event)
+## Key facts the design rests on
 
-| Field | Used for |
-|---|---|
-| `hook_event_name` | dispatch |
-| `session_id` | stored as `claude_session_id` |
-| `transcript_path` | reading the last assistant message (JSONL) |
-| `cwd` | stored on first sight |
-
-`CCB_TASK` (environment, set by `ccb start` via `tmux -e`) identifies the session. Without
-it the hook exits 0 immediately.
+1. **`AskUserQuestion` goes through `PermissionRequest`.** The hook receives
+   `tool_name: "AskUserQuestion"` and `tool_input.questions[]` (`question`, `header`,
+   `options[{label, description}]`, `multiSelect`). Returning
+   `{"hookSpecificOutput": {"hookEventName": "PermissionRequest", "decision": {"behavior": "allow",
+   "updatedInput": {…questions, "answers": {"<question>": "<label or text>"}}}}}` answers the
+   question: the dialog closes, the terminal shows "Allowed by PermissionRequest hook", Claude
+   receives the answers. Multi-select answers are labels joined with `", "` — exactly what the
+   TUI produces.
+2. **Permissions** (`Bash`, `Edit`, …) use the same hook: `{"behavior": "allow"}` (optionally
+   `updatedPermissions`: echo `permission_suggestions` for "don't ask again") or
+   `{"behavior": "deny", "message": "…"}` — Claude sees the message ("Denied by
+   PermissionRequest hook").
+3. **The dialog is drawn while the hook is still running.** A human at the keyboard can answer
+   in the terminal at any time; the hook then sees the request disappear (via `PostToolUse` /
+   `UserPromptSubmit`) and exits without a decision. Blocking therefore costs nothing.
+4. A hook cancelled at its `timeout` yields no decision (the dialog simply stays). `ccb` exits
+   on its own at `answer_timeout` (3300 s) before the 3600 s hook timeout.
+5. `Notification/permission_prompt` fires ~6 s after a dialog appears **only if nobody typed**;
+   `idle_prompt` ~60 s after a `Stop`. Both are safety nets, not primary signals.
+6. `Stop` carries `last_assistant_message` — no transcript parsing needed (kept as fallback).
 
 ## Per-event handling
 
-### `Stop`
-Fires after every assistant turn. `stop_hook_active: true` means this Stop was itself
-triggered by a previous Stop hook continuing the agent — always ignore.
+| Hook | ccb does | State | Event |
+|---|---|---|---|
+| `PermissionRequest` | build `pending` (kind question/permission, source `hook`, hook pid), publish, **wait** for `ccb answer` (poll 0.5 s, re-check state every 2 s) | `awaiting_input` / `awaiting_permission` | `ask` |
+| … answered by `ccb answer` | return decision JSON | `running`, `pending` = null | — |
+| … answered in the TUI / new prompt / timeout / `--release` | return nothing | unchanged until the next hook | — |
+| `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `UserPromptSubmit` | clear `pending` | `running` | — |
+| `Stop` (`stop_hook_active` false) | store `last_message` + marker; apply `stop_policy` | `idle` (or `done` / `running` by marker) | `notify/idle` or `notify/done` |
+| `Stop` (`stop_hook_active` true) | ignore | — | — |
+| `Notification/permission_prompt` | if no `pending`: parse the screen (`ccb_screen`) and publish a `pending` with `source: screen` — fallback for sessions whose PermissionRequest hook is missing | `awaiting_*` | `ask` |
+| `Notification/idle_prompt` | if status is still `running`: treat as a missed `Stop` | `idle` | `notify/idle` |
+| `SessionEnd` | `stopped`; notify unless `stopped_by_ccb` | `stopped` | `notify/stopped` |
 
-Otherwise `ccb hook` reads the last assistant text from `transcript_path` and looks for a
-marker on its last line:
+### `stop_policy` (config)
 
-| Marker | State | Route |
+| Value | Behaviour on a marker-less `Stop` |
+|---|---|
+| `notify` (default) | every finished turn → `notify/idle` with the last message, deduplicated by message digest |
+| `markers` | silent unless the message ends with `?`; `[[CCB:…]]` markers decide everything else |
+| `silent` | never notify on `Stop`; `ask` events still flow |
+
+Markers are optional and always parsed: `[[CCB:DONE]]` → `done` + `notify/done`;
+`[[CCB:ROUND:n]]` → `running`, silent; `[[CCB:NEED_INPUT]]` → `idle` + `notify/idle`. A coding
+skill may emit exactly one marker as the last line of a turn; the bridge strips it from
+`last_message`. Nothing in the bridge depends on them.
+
+## Dedup
+
+- One `ask` per `request_id` (`notified[request_id]` in the state file; `ccb-filter.py` keeps
+  a 6-hour stamp per request as a second guard).
+- One `notify/idle` per distinct last message (`notified["stop-<sha1>"]`).
+- Hermes' webhook adapter dedups on `X-Request-ID` = `event_id` for one hour.
+
+## Timing budget
+
+| Hook | `timeout` | Why |
 |---|---|---|
-| `[[CCB:DONE]]` | `done` | `ccb-notify` |
-| `[[CCB:ROUND:n]]` | `running` | silent |
-| `[[CCB:NEED_INPUT]]` | `awaiting_input`, `question` = message | `ccb-ask` |
-| none, message ends with `?` | `awaiting_input` | `ccb-ask` |
-| none | `awaiting_input`, `pending_stop` set | `ccb-ask` (filter may debounce) |
+| `PermissionRequest` | 3600 | blocks until the human answers; `answer_timeout` 3300 keeps ccb the one that ends the wait |
+| `Stop`, `Notification` | 30 | one webhook POST (5 s network timeout) |
+| `SessionEnd` | 10 | Claude Code raises its 1.5 s budget to the largest configured timeout |
+| others | 10 | a state-file write |
 
-Teach the coding skill (e.g. `task-flow`) to end each turn with exactly one marker line.
-That removes all guessing from this table.
-
-### `Notification`
-Payload has `message` and a type field (`notification_type` in recent builds). Types
-we care about: permission prompts and idle prompts. Anything else is ignored.
-Notification is **not** relied upon alone — `Stop` and `PermissionRequest` are the primary
-signals; Notification is a belt-and-braces path.
-
-### `PermissionRequest`
-Fields: `tool_name`, `tool_input`, optionally `permission_suggestions`. Always
-`awaiting_permission` → `ccb-ask`. `ccb send` maps yes/no words to `y`/`n` in this state.
-
-### `UserPromptSubmit`
-Any new prompt (from a human at the keyboard or `ccb send`) resets the session to
-`running` and clears `question`, `permission`, `notified`. This is what makes the debounce
-work: a Stop followed quickly by a new prompt never reaches the human.
-
-### `SessionEnd`
-State `stopped`. Route `ccb-notify` unless `stopped_by_ccb` is set (owner ran `ccb stop`).
-
-## Dedup rules
-
-- `notified[route] = event_id` after a successful POST; while the session stays in an
-  `awaiting_*` state, the same route is not fired again.
-- Hermes' webhook adapter additionally dedups on `X-Request-ID` for one hour.
-- `ccb-filter.py` rate-limits `ask` to one per 60 s per session and drops `ask` events
-  whose session is no longer awaiting by the time Hermes processes them.
-
-## Transcript format notes
-
-`transcript_path` is a JSONL file; assistant records look like
-`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"…"}, …]}}`.
-`ccb hook` concatenates the `text` blocks of the **last** assistant record. Tool-use-only
-turns have no text and are skipped.
+Hook processes run `python3` from the `PATH` of the shell that launched `claude` inside tmux;
+`ccb.py` is Python 3.9-compatible for that reason (macOS system Python).

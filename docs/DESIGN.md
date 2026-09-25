@@ -232,14 +232,14 @@ and shells out to `ccb answer`. The skill stays the documented behaviour for bot
 **v0.2 — skill + hook interception (this repo, done):** `ccb` with `answer`/`screen`/`demo`,
 sinks, filter, templates, install.sh, tests (37), references.
 
-**v0.3 — first real deployment (next, on the owner's machine):**
+**v0.3 — first real deployment (done 2026-09-25 on the owner's machine; routes, hooks and a Telegram-driven `ccb demo` verified):**
 1. Enable the Hermes webhook adapter (`platforms.webhook.enabled: true` in config.yaml, gateway restart), run
    `install.sh`, `ccb doctor`.
 2. Remove the iteration-2 hooks (`cc_hook.py`) from `~/.claude/settings.json`.
 3. `ccb demo` through Telegram; fix whatever the agent gets wrong in procedure B/C.
 4. Decide `ccb-ask` mode: agent turn vs `deliver_only` text.
 
-**v1.0 — Hermes plugin `hermes-claude-code-bridge`:**
+**v1.0 — Hermes plugin `cc-bridge` (specification: `docs/tasks/v1.0-plugin.md`):**
 5. Plugin skeleton (`plugin.yaml`, `register(ctx)`), bundled skill via `ctx.register_skill`.
 6. Inbox poller task started from the Telegram handler factory; renders `ask` with inline
    buttons and `notify` as text; resolves home chat id from the adapter config.
